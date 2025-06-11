@@ -1,20 +1,33 @@
 import csv
 import requests
 import os
+import logging
 from typing import List, Tuple, Dict
 from dotenv import load_dotenv
-from math import radians, sin, cos, asin, sqrt
+from math import radians
+import numpy as np
+from functools import lru_cache
+from sklearn.neighbors import BallTree
 
 load_dotenv()
 API_KEY = os.getenv("GRAPH_HOPPER_API_KEY")
+logging.basicConfig(level=logging.INFO)
 
-import logging
+EARTH_RADIUS_MILES = 3958.8
+
+@lru_cache(maxsize=None)
+def haversine_distance(coord1: Tuple[float, float], coord2: Tuple[float, float]) -> float:
+    logging.debug(f"Calculating haversine distance between {coord1} and {coord2}")
+    lat1, lon1 = map(radians, coord1)
+    lat2, lon2 = map(radians, coord2)
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = np.sin(dlat/2)**2 + np.cos(lat1)*np.cos(lat2)*np.sin(dlon/2)**2
+    c = 2 * np.arcsin(np.sqrt(a))
+    return EARTH_RADIUS_MILES * c
+
 def calculate_route(start_latitude: float, start_longitude: float, finish_latitude: float, finish_longitude: float) -> List[Tuple[float, float]]:
     logging.info(f"Calculating route from ({start_latitude}, {start_longitude}) to ({finish_latitude}, {finish_longitude})")
-    """
-    Calculates the route between two locations using the GraphHopper API.
-    Returns a list of (latitude, longitude) coordinates representing the route.
-    """
     try:
         url = "https://graphhopper.com/api/1/route"
         params = {
@@ -28,113 +41,137 @@ def calculate_route(start_latitude: float, start_longitude: float, finish_latitu
         response = requests.get(url, params=params)
         response.raise_for_status()
         data = response.json()
-
         if data['paths']:
             coordinates = data['paths'][0]['points']['coordinates']
-            return [(coord[1], coord[0]) for coord in coordinates]  # Reverse (lon, lat) to (lat, lon)
-        else:
-            return []
+            return [(coord[1], coord[0]) for coord in coordinates]  # lat, lon
+        return []
     except requests.exceptions.RequestException as e:
         logging.error(f"Error during route calculation: {e}")
         return []
 
-def get_distance(coord1: Tuple[float, float], coord2: Tuple[float, float]) -> float:
-    logging.debug(f"Calculating distance between {coord1} and {coord2}")
-    lat1, lon1 = coord1
-    lat2, lon2 = coord2
-    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
-    dlon = lon2 - lon1
-    dlat = lat2 - lat1
-    a = sin(dlat / 2)**2 + cos(lat1) * cos(lat2) * sin(dlon / 2)**2
-    c = 2 * asin(sqrt(a))
-    r = 3956
-    return c * r
+def clean_fuel_data(fuel_prices: List[Dict]) -> Tuple[List[Dict], BallTree]:
+    logging.info(f"Cleaning {len(fuel_prices)} fuel prices")
+    cleaned = []
+    points = []
+    for row in fuel_prices:
+        try:
+            lat = float(row['Latitude'].strip())
+            lon = float(row['Longitude'].strip())
+            price = float(row['Retail Price'].strip())
+            row['Latitude'] = lat
+            row['Longitude'] = lon
+            row['Retail Price'] = price
+            cleaned.append(row)
+            points.append([radians(lat), radians(lon)])
+        except (ValueError, KeyError, AttributeError):
+            continue
+    tree = BallTree(np.array(points), metric='haversine')
+    return cleaned, tree
 
-def find_potential_fuel_stops(route: List[Tuple[float, float]], fuel_prices: List[Dict], max_range: int) -> List[Dict]:
-    potential_stops = []
+def find_potential_fuel_stops(route: List[Tuple[float, float]], fuel_prices: List[Dict], tree: BallTree, max_distance: float = 3) -> List[Dict]:
+    potential_stops = set()
+    rad_dist = max_distance / EARTH_RADIUS_MILES
     for lat, lon in route:
-        for stop in fuel_prices:
-            lat_str = stop.get('Latitude', '').strip()
-            lon_str = stop.get('Longitude', '').strip()
-            
-            if not lat_str or not lon_str:
-                continue  # Skip invalid or empty values
-            
-            try:
-                stop_lat = float(lat_str)
-                stop_lon = float(lon_str)
-            except ValueError:
-                continue  # Skip non-convertible values
-
-            if get_distance((lat, lon), (stop_lat, stop_lon)) <= 10:
-                logging.debug(f"Potential stop found at ({stop_lat}, {stop_lon}) for route point ({lat}, {lon})")
-                potential_stops.append(stop)
-
-    logging.info(f"Found {len(potential_stops)} potential fuel stops.")
-    return potential_stops
-
-def determine_optimal_fuel_stops(start_latitude: float, start_longitude: float, finish_latitude: float, finish_longitude: float, fuel_prices: List[Dict], mpg: int, max_range: int) -> List[Dict]:
-    logging.info(f"Determining optimal fuel stops from ({start_latitude}, {start_longitude}) to ({finish_latitude}, {finish_longitude}) with mpg={mpg} and max_range={max_range}")
-    route = calculate_route(start_latitude, start_longitude, finish_latitude, finish_longitude)
+        idxs = tree.query_radius([[radians(lat), radians(lon)]], r=rad_dist)[0]
+        potential_stops.update(idxs)
+    potential_stops_list = [fuel_prices[i] for i in potential_stops]
+    logging.info(f"Found {len(potential_stops_list)} potential fuel stops within {max_distance} miles")
+    return potential_stops_list
+def determine_optimal_fuel_stops(start_lat: float, start_lon: float, end_lat: float, end_lon: float,
+                                 fuel_prices: List[Dict], tree: BallTree, mpg: int, tank_range: int) -> List[Dict]:
+    logging.info(f"Determining optimal fuel stops from ({start_lat}, {start_lon}) to ({end_lat}, {end_lon}) with mpg={mpg} and tank_range={tank_range}")
+    route = calculate_route(start_lat, start_lon, end_lat, end_lon)
     if not route:
+        logging.error("Failed to calculate route.")
         return []
 
     optimal_stops = []
-    current_location = (start_latitude, start_longitude)
-    remaining_range = max_range
+    visited_indices = set()
+    current_location = (start_lat, start_lon)
+    remaining_range = tank_range
 
-    while get_distance(current_location, (finish_latitude, finish_longitude)) > remaining_range:
-        potential_stops = []
-        for stop in fuel_prices:
-            lat_str = stop.get('Latitude', '').strip()
-            lon_str = stop.get('Longitude', '').strip()
-            price_str = stop.get('Retail Price', '').strip()
+    while haversine_distance(current_location, (end_lat, end_lon)) > remaining_range:
+        current_rad = [radians(current_location[0]), radians(current_location[1])]
+        max_rad = tank_range / EARTH_RADIUS_MILES
+        idxs = tree.query_radius([current_rad], r=max_rad)[0]
 
-            if not lat_str or not lon_str or not price_str:
-                continue
-
-            try:
-                stop_lat = float(lat_str)
-                stop_lon = float(lon_str)
-                stop_price = float(price_str)
-            except ValueError:
-                continue
-
-            stop_location = (stop_lat, stop_lon)
-            distance_to_stop = get_distance(current_location, stop_location)
-            distance_stop_to_finish = get_distance(stop_location, (finish_latitude, finish_longitude))
-            distance_current_to_finish = get_distance(current_location, (finish_latitude, finish_longitude))
-
-            if distance_to_stop <= remaining_range and distance_stop_to_finish < distance_current_to_finish:
-                potential_stops.append({
-                    'Latitude': stop_lat,
-                    'Longitude': stop_lon,
-                    'Retail Price': stop_price,
-                    **stop
-                })
-
-        logging.info(f"{len(potential_stops)} possible fuel stops within {remaining_range} miles")
-
-        if not potential_stops:
-            logging.warning("No fuel stops within range. Unable to complete the route.")
+        if not len(idxs):
+            logging.warning("No reachable stations. Route cannot be completed.")
             return []
 
-        cheapest_stop = min(potential_stops, key=lambda stop: float(stop['Retail Price']))
-        optimal_stops.append(cheapest_stop)
+        candidates = []
+        for idx in idxs:
+            if idx in visited_indices:
+                continue
+            stop = fuel_prices[idx]
+            stop_loc = (stop['Latitude'], stop['Longitude'])
+            dist_to_stop = haversine_distance(current_location, stop_loc)
+            dist_stop_to_end = haversine_distance(stop_loc, (end_lat, end_lon))
 
-        current_location = (float(cheapest_stop['Latitude']), float(cheapest_stop['Longitude']))
-        remaining_range = max_range
+            # Only consider if this moves us forward
+            if dist_stop_to_end < haversine_distance(current_location, (end_lat, end_lon)):
+                candidates.append((idx, stop, dist_to_stop, dist_stop_to_end))
 
-    # FIX: Return the list of optimal stops after the loop completes.
-    return optimal_stops
+        if not candidates:
+            logging.warning("No forward fuel stops found. Route cannot be completed.")
+            return []
+
+        # Sort by price
+        candidates.sort(key=lambda x: x[1]['Retail Price'])
+
+        for idx, stop, dist_to_stop, _ in candidates:
+            if dist_to_stop <= tank_range:
+                cheaper_ahead = any(fuel_prices[i]['Retail Price'] < stop['Retail Price'] for i in idxs if i not in visited_indices)
+
+                if not cheaper_ahead:
+                    gallons_needed = tank_range / mpg
+                else:
+                    gallons_needed = dist_to_stop / mpg
+                
+                stop['Fuel Added (gallons)'] = float(round(gallons_needed, 2))
+                stop['Cost ($)'] = float(round(gallons_needed * stop['Retail Price'], 2))
+                optimal_stops.append(stop)
+                visited_indices.add(idx)
+                current_location = (stop['Latitude'], stop['Longitude'])
+                remaining_range = tank_range
+                break
+        else:
+            logging.warning("All reachable stops are more expensive or unreachable. Cannot proceed.")
+            return []
+    real_stops = [stop for stop in optimal_stops if stop.get('Cost ($)', 0) > 0]
+
+# Number of fuel stops
+    num_stops = len(real_stops)
+
+    # Total fuel cost
+    total_cost = round(sum(stop['Cost ($)'] for stop in real_stops), 2)
+
+    # Optional: Total fuel added
+    total_fuel = round(sum(stop['Fuel Added (gallons)'] for stop in real_stops), 2)
+
+    logging.info(f"Number of fuel stops: {num_stops}")
+    logging.info(f"Total fuel cost: ${total_cost}")
+    logging.info(f"Total fuel added: {total_fuel} gallons")
+    # Final leg
+    final_leg_distance = haversine_distance(current_location, (end_lat, end_lon))
+    gallons_needed = final_leg_distance / mpg
+    final_leg = {
+        'Truckstop Name': 'Final Leg to Destination',
+        'Latitude': end_lat,
+        'Longitude': end_lon,
+        'Fuel Added (gallons)': float(round(gallons_needed, 2)),
+        'Cost ($)': 0.0
+    }
+    optimal_stops.append(final_leg)
+    return [optimal_stops,{"Number Of Fuel Stops": num_stops, "Total Fuel Cost":total_cost, "Total Fuel Added":total_fuel}]
 
 if __name__ == '__main__':
-    fuel_prices_csv = "fuel-prices-geocoded.csv"
-    fuel_prices = []
+    fuel_prices_csv = "fuel-prices-cleaned.csv"
     with open(fuel_prices_csv, 'r') as f:
         reader = csv.DictReader(f)
-        for row in reader:
-            fuel_prices.append(row)
+        raw_data = [row for row in reader]
+
+    cleaned_data, fuel_tree = clean_fuel_data(raw_data)
 
     start_latitude = 24.5551
     start_longitude = -81.7800
@@ -146,9 +183,10 @@ if __name__ == '__main__':
     route = calculate_route(start_latitude, start_longitude, finish_latitude, finish_longitude)
     if route:
         logging.info("Route calculated successfully.")
-        potential_stops = find_potential_fuel_stops(route, fuel_prices, max_range)
+        logging.info(f"Route {(route[::500])}")
+        potential_stops = find_potential_fuel_stops(route[::500], cleaned_data, fuel_tree)
         logging.info(f"Found {len(potential_stops)} potential fuel stops.")
-        optimal_stops = determine_optimal_fuel_stops(start_latitude, start_longitude, finish_latitude, finish_longitude, fuel_prices, mpg, max_range)
+        optimal_stops = determine_optimal_fuel_stops(start_latitude, start_longitude, finish_latitude, finish_longitude, cleaned_data, fuel_tree, mpg, max_range)
         logging.info(f"Optimal stops: {optimal_stops}")
     else:
         logging.error("Could not calculate route.")

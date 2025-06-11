@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Fuel Cost Optimizer</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <style>
+        #mapid { height: 500px; width: 100%; }
+        body { font-family: sans-serif; margin: 20px; }
+        .input-group { margin-bottom: 10px; }
+        label { display: inline-block; width: 120px; }
+        input { width: 200px; padding: 5px; }
+        button { padding: 8px 15px; background-color: #007bff; color: white; border: none; cursor: pointer; }
+        button:hover { background-color: #0056b3; }
+    </style>
+</head>
+<body>
+    <h1>Fuel Cost Optimizer</h1>
+
+    <div class="input-group">
+        <label for="start_latitude">Start Latitude:</label>
+        <input type="text" id="start_latitude" value="24.5551">
+    </div>
+    <div class="input-group">
+        <label for="start_longitude">Start Longitude:</label>
+        <input type="text" id="start_longitude" value="-81.7800">
+    </div>
+    <div class="input-group">
+        <label for="finish_latitude">End Latitude:</label>
+        <input type="text" id="finish_latitude" value="48.3871">
+    </div>
+    <div class="input-group">
+        <label for="finish_longitude">End Longitude:</label>
+        <input type="text" id="finish_longitude" value="-124.7146">
+    </div>
+    <button id="optimizeButton">Optimize Fuel Stops</button>
+
+    <div id="mapid"></div>
+
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script>
+        var map = L.map('mapid').setView([37.0902, -95.7129], 4); // Centered on US
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+
+        var routePolyline = null;
+        var stopMarkers = [];
+
+        function clearMap() {
+            if (routePolyline) {
+                map.removeLayer(routePolyline);
+            }
+            stopMarkers.forEach(marker => map.removeLayer(marker));
+            stopMarkers = [];
+        }
+
+        document.getElementById('optimizeButton').addEventListener('click', function() {
+            clearMap();
+
+            var start_latitude = document.getElementById('start_latitude').value;
+            var start_longitude = document.getElementById('start_longitude').value;
+            var finish_latitude = document.getElementById('finish_latitude').value;
+            var finish_longitude = document.getElementById('finish_longitude').value;
+
+            var url = `/optimizer/optimal_fuel_stops/?start_latitude=${start_latitude}&start_longitude=${start_longitude}&finish_latitude=${finish_latitude}&finish_longitude=${finish_longitude}`;
+
+            fetch(url)
+                .then(response => response.json()) // Get response as JSON
+                .then(data => {
+                    if (data.error) {
+                        console.error('API Error:', data.error);
+                        alert('Error: ' + data.error);
+                        return;
+                    }
+                    
+                    var optimalStops = data.optimal_stops;
+                    var startLat = data.start_lat;
+                    var startLon = data.start_lon;
+                    var finishLat = data.finish_lat;
+                    var finishLon = data.finish_lon;
+
+                    if (optimalStops && optimalStops.length > 0) {
+                        var routeCoordinates = [];
+                        var bounds = L.latLngBounds([]);
+
+                        // Add start point
+                        routeCoordinates.push([startLat, startLon]);
+                        bounds.extend([startLat, startLon]);
+                        L.marker([startLat, startLon]).addTo(map)
+                            .bindPopup("<b>Start Point</b><br>Lat: " + startLat + "<br>Lon: " + startLon).openPopup();
+
+                        // Add fuel stops
+                        optimalStops.forEach(function(stop, index) {
+                            routeCoordinates.push([stop.latitude, stop.longitude]);
+                            bounds.extend([stop.latitude, stop.longitude]);
+                            var marker = L.marker([stop.latitude, stop.longitude]).addTo(map)
+                                .bindPopup("<b>Fuel Stop " + (index + 1) + "</b><br>Lat: " + stop.latitude + "<br>Lon: " + stop.longitude + "<br>Price: $" + stop.price_per_gallon.toFixed(2));
+                            stopMarkers.push(marker);
+                        });
+
+                        // Add finish point
+                        routeCoordinates.push([finishLat, finishLon]);
+                        bounds.extend([finishLat, finishLon]);
+                        L.marker([finishLat, finishLon]).addTo(map)
+                            .bindPopup("<b>End Point</b><br>Lat: " + finishLat + "<br>Lon: " + finishLon).openPopup();
+
+                        routePolyline = L.polyline(routeCoordinates, {color: 'blue'}).addTo(map);
+                        map.fitBounds(bounds);
+                    } else {
+                        alert("No optimal stops found for the given route.");
+                    }
+                })
+                .catch(error => console.error('Error:', error));
+        });
+    </script>
+</body>
+</html>

@@ -15,8 +15,11 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
+from django.views.generic import TemplateView
+from optimizer.views import map_view
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('optimizer/', include('optimizer.urls')),
+    path('', map_view, name='home'),
 ]
