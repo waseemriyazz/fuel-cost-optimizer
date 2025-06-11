@@ -26,7 +26,8 @@ SECRET_KEY = "django-insecure-ahereu_b_9_tjau=yrvxyyvkrjzdp)in&kx1mj&4#jgct07mui
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['fuel-cost-optimizer.onrender.com', 'localhost', '127.0.0.1']
+
 
 
 # Application definition
