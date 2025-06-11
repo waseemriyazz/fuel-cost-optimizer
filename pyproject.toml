@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "fuel-cost-optimizer"
+version = "0.1.0"
+description = ""
+authors = ["Waseem"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+aiohttp = "^3.12.12"
+aiofiles = "^24.1.0"
+requests = "^2.32.4"
+python-dotenv = "^1.0.0"
+scipy = "^1.15.3"
+scikit-learn = "^1.7.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
