@@ -1,6 +1,6 @@
 # Fuel Cost Optimizer API
 
-[![Python Version](https://img.shields.io/badge/python-3.9-blue.svg)](https://www.python.org/downloads/release/python-390/)
+[![Python Version](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/release/python-312/)
 [![Framework](https://img.shields.io/badge/Framework-Django-green.svg)](https://www.djangoproject.com/)
 [![Dependency Management](https://img.shields.io/badge/dependencies-Poetry-orange.svg)](https://python-poetry.org/)
 
@@ -14,7 +14,16 @@ This project provides a Django API for optimizing fuel costs along a route. It t
 *   **Fuel Cost Optimization:** Calculates optimal fuel stops based on fuel prices and vehicle range.
 *   **Route Calculation:** Calculates the route between start and finish locations using the GraphHopper API.
 *   **JSON Response:** Returns optimal fuel stops and total fuel cost in JSON format.
-*   **Dependency Management:** Uses Poetry for managing dependencies.
+*   **Dependency Management:** Uses Poetry for managing dependencies, including `aiohttp`, `aiofiles`, `requests`, `python-dotenv`, `scipy`, and `scikit-learn`.
+
+## How it works?
+
+The core logic for fuel cost optimization is implemented in `fuel_optimizer.py`. Here's a high-level overview of the process:
+
+1.  **Route Calculation:** The `calculate_route` function uses the GraphHopper API to determine the geographical path between the specified start and finish coordinates.
+2.  **Fuel Data Cleaning:** The `clean_fuel_data` function processes raw fuel price data, converting latitude, longitude, and retail prices to appropriate numerical formats and building a `BallTree` for efficient spatial querying of fuel stations.
+3.  **Optimal Fuel Stop Determination:** The `determine_optimal_fuel_stops` function orchestrates the optimization. It iteratively identifies potential fuel stops along the calculated route, considering the vehicle's fuel range. It prioritizes stops that are within range and move the vehicle closer to the destination, aiming to find the most cost-effective fueling points. The algorithm ensures that the vehicle can always reach the next optimal stop or the final destination.
+4.  **Output:** The function returns a list of optimal fuel stops with details like fuel added and cost, along with summary statistics including the total number of stops, total fuel cost, and total fuel added.
 
 ## Project Structure
 
@@ -36,9 +45,10 @@ This project provides a Django API for optimizing fuel costs along a route. It t
 │   │   ├── views.py    # Django views (API endpoints)
 │   │   └── ...
 ├── fuel-prices-cleaned.csv # CSV file containing fuel prices
-├── bestest_fuel_optimizer.py # Original fuel optimization logic
+├── fuel_optimizer.py   # Core fuel optimization logic
 ├── pyproject.toml      # Poetry configuration and dependencies
-└── poetry.lock         # Poetry lock file
+├── poetry.lock         # Poetry lock file
+└── fuel_app/templates/index.html # Frontend HTML for the web interface
 ```
 
 ## Setup
@@ -115,7 +125,14 @@ The API will be accessible at `http://localhost:8000`.
               "Cost ($)": "..."
             },
             ...
-          ]
+          ],
+          "start_lat": "...",
+          "start_lon": "...",
+          "finish_lat": "...",
+          "finish_lon": "...",
+          "Number Of Fuel Stops": "...",
+          "Total Fuel Cost": "...",
+          "Total Fuel Added": "..."
         }
         ```
 
@@ -125,3 +142,24 @@ The API will be accessible at `http://localhost:8000`.
 ## Testing
 
 To test the API, you can send a GET request to the `/optimizer/optimal_fuel_stops/` endpoint with valid query parameters. You can use tools like `curl` or Postman to send the request and inspect the response.
+
+## Web Interface
+
+This project includes a basic web interface for visualizing the optimal fuel stops on a map.
+
+### Accessing the Web Interface
+
+After running the Django development server (as described in "Running the API Locally"), open your web browser and navigate to:
+
+```
+http://localhost:8000/
+```
+
+### Functionality
+
+*   Enter the start and finish latitude/longitude coordinates.
+*   Click "Optimize Fuel Stops" to send a request to the API.
+*   The route and optimal fuel stops will be displayed on an interactive map using Leaflet.js.
+*   Popups on markers provide details about start, end, and fuel stop locations.
+
+![Example Run](image.png)
