@@ -1,13 +1,14 @@
+
 import csv
-import requests
 import os
 import logging
 from typing import List, Tuple, Dict
-from dotenv import load_dotenv
 from math import radians
 import numpy as np
 from functools import lru_cache
 from sklearn.neighbors import BallTree
+import requests
+from dotenv import load_dotenv
 
 load_dotenv()
 API_KEY = os.getenv("GRAPH_HOPPER_API_KEY")
@@ -165,28 +166,17 @@ def determine_optimal_fuel_stops(start_lat: float, start_lon: float, end_lat: fl
     optimal_stops.append(final_leg)
     return [optimal_stops,{"Number Of Fuel Stops": num_stops, "Total Fuel Cost":total_cost, "Total Fuel Added":total_fuel}]
 
-if __name__ == '__main__':
-    fuel_prices_csv = "fuel-prices-cleaned.csv"
-    with open(fuel_prices_csv, 'r') as f:
-        reader = csv.DictReader(f)
-        raw_data = [row for row in reader]
+FUEL_PRICES_CSV = "fuel-prices-cleaned.csv"
 
-    cleaned_data, fuel_tree = clean_fuel_data(raw_data)
+def load_fuel_prices():
+    fuel_prices = []
+    try:
+        with open(FUEL_PRICES_CSV, 'r') as f:
+            reader = csv.DictReader(f)
+            fuel_prices = [row for row in reader]
+    except FileNotFoundError:
+        logging.error(f"Fuel price file not found: {FUEL_PRICES_CSV}")
+        return [], None
 
-    start_latitude = 24.5551
-    start_longitude = -81.7800
-    finish_latitude = 48.3871
-    finish_longitude = -124.7146
-    mpg = 10
-    max_range = 500
-
-    route = calculate_route(start_latitude, start_longitude, finish_latitude, finish_longitude)
-    if route:
-        logging.info("Route calculated successfully.")
-        logging.info(f"Route {(route[::500])}")
-        potential_stops = find_potential_fuel_stops(route[::500], cleaned_data, fuel_tree)
-        logging.info(f"Found {len(potential_stops)} potential fuel stops.")
-        optimal_stops = determine_optimal_fuel_stops(start_latitude, start_longitude, finish_latitude, finish_longitude, cleaned_data, fuel_tree, mpg, max_range)
-        logging.info(f"Optimal stops: {optimal_stops}")
-    else:
-        logging.error("Could not calculate route.")
+    cleaned_data, fuel_tree = clean_fuel_data(fuel_prices)
+    return cleaned_data, fuel_tree
